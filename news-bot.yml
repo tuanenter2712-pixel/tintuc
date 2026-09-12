@@ -1,0 +1,40 @@
+name: News to Telegram
+
+on:
+  schedule:
+    # Chạy mỗi 30 phút (giờ UTC). GitHub có thể trễ vài phút vào giờ cao điểm,
+    # đó là giới hạn chung của GitHub Actions, không phải lỗi của script.
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {} # cho phép bấm "Run workflow" để chạy thử thủ công
+
+permissions:
+  contents: write # cần quyền này để commit lại seen.json
+
+jobs:
+  fetch-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run news bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python news_to_telegram.py
+
+      - name: Lưu lại trạng thái (seen.json)
+        run: |
+          git config user.name "news-bot"
+          git config user.email "news-bot@users.noreply.github.com"
+          git add seen.json
+          git diff --staged --quiet || git commit -m "cap nhat trang thai tin da gui"
+          git push
