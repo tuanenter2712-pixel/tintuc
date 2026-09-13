@@ -1,14 +1,18 @@
 """
-News -> Telegram bot (6 nguồn, chạy mỗi giờ, lọc chủ đề + dịch tiếng Việt bằng Claude)
+News -> Telegram bot (8 nguồn, chạy mỗi giờ, lọc chủ đề + dịch tiếng Việt bằng Claude)
 --------------------------------------------------------------------------------------------------
-Đọc tin từ 6 nguồn RSS bên dưới, CHỈ giữ lại tin được đăng trong vòng
+Đọc tin từ 8 nguồn RSS bên dưới, CHỈ giữ lại tin được đăng trong vòng
 LOOKBACK_HOURS giờ gần nhất (mặc định 24h) và chưa từng gửi trước đó (lưu
 trong seen.json). Với các tin đạt yêu cầu, gửi cho Claude (Anthropic API) để:
   1) Lọc: chỉ giữ tin về smartphone / AI / công nghệ, bỏ tin quảng cáo,
      khuyến mãi, tài trợ (sponsored), hoặc không liên quan công nghệ.
   2) Dịch tiêu đề + tóm tắt sang tiếng Việt: chính xác với nội dung gốc
      nhưng viết theo văn phong hấp dẫn, lôi cuốn người đọc.
-Sau đó gửi các tin đã lọc + đã dịch về Telegram.
+  3) Gộp nhóm: nếu nhiều nguồn cùng đưa tin về MỘT sự kiện/tin tức giống nhau
+     (kể cả khi viết bằng ngôn ngữ khác nhau) -> gộp lại thành 1 tin nhắn duy
+     nhất, liệt kê đủ các nguồn, KHÔNG gửi lặp lại nhiều tin nhắn cho cùng 1
+     câu chuyện.
+Sau đó gửi các tin đã lọc + đã dịch + đã gộp về Telegram.
 
 Lịch chạy: mỗi giờ, 07:00-23:00 giờ Hà Nội (xem .github/workflows/news-bot.yml).
 Nhờ lọc theo LOOKBACK_HOURS = 24 giờ gần nhất (thay vì "đúng ngày hôm nay"
@@ -39,6 +43,8 @@ SOURCES = [
     {"name": "Ars Technica", "url": "https://feeds.arstechnica.com/arstechnica/index"},
     {"name": "Android Authority", "url": "http://feed.androidauthority.com/"},
     {"name": "VnExpress - Khoa học công nghệ", "url": "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss"},
+    {"name": "GenK", "url": "https://genk.vn/rss/home.rss"},
+    {"name": "VnReview", "url": "https://vnreview.vn/forums/-/index.rss"},
 ]
 
 # Chỉ lấy tin được đăng trong vòng LOOKBACK_HOURS giờ gần nhất — không lấy tin cũ hơn.
@@ -111,7 +117,7 @@ def send_telegram_message(text: str):
 
 
 # ----------------------------------------------------------------------
-# 4. LỌC CHỦ ĐỀ + DỊCH BẰNG CLAUDE
+# 4. LỌC CHỦ ĐỀ + DỊCH + GỘP TIN TRÙNG BẰNG CLAUDE
 # ----------------------------------------------------------------------
 def clean_summary(raw_html: str, limit: int = 300) -> str:
     """Feed RSS thường có HTML trong phần tóm tắt -> bỏ thẻ HTML, cắt bớt độ dài."""
@@ -141,8 +147,9 @@ def is_recent_enough(entry) -> bool:
 def classify_and_translate(items, client):
     """
     Gửi 1 lần cho Claude toàn bộ danh sách tin mới, nhận về JSON gồm:
-    relevant (có nên gửi không), title_vi (tiêu đề tiếng Việt),
-    summary_vi (tóm tắt ngắn tiếng Việt).
+    relevant (có nên gửi không), duplicate_group (số nhóm để gộp các tin
+    trùng nội dung đến từ nhiều nguồn khác nhau), title_vi (tiêu đề tiếng
+    Việt), summary_vi (tóm tắt ngắn tiếng Việt).
     """
     if not items:
         return []
@@ -152,22 +159,23 @@ def classify_and_translate(items, client):
         for i, it in enumerate(items)
     )
 
-    prompt = f"""Bạn là bộ lọc + biên tập tin tức công nghệ cho một kênh Telegram tiếng Việt. Dưới đây là {len(items)} tin.
+    prompt = f"""Bạn là bộ lọc + biên tập tin tức công nghệ cho một kênh Telegram tiếng Việt. Dưới đây là {len(items)} tin, lấy từ nhiều nguồn khác nhau (có thể có nguồn tiếng Anh và nguồn tiếng Việt).
 
 Với MỖI tin, hãy xác định:
-- "relevant": true nếu tin thuộc chủ đề smartphone, AI (trí tuệ nhân tạo), hoặc công nghệ nói chung (phần cứng, phần mềm, chip, startup công nghệ, ứng dụng...). Trả về false nếu đây là: bài quảng cáo, tin khuyến mãi/giảm giá/deal mua sắm, nội dung được tài trợ (sponsored/partner content), hoặc chủ đề không liên quan công nghệ (chính trị, giải trí đơn thuần, thể thao...).
-- "title_vi": biên tập lại tiêu đề bằng tiếng Việt sao cho NGẮN GỌN, HẤP DẪN, thu hút người đọc bấm vào xem — nhưng phải giữ ĐÚNG sự thật, không giật gân sai lệch so với nội dung gốc. Nếu tin gốc đã bằng tiếng Việt (ví dụ từ VnExpress), chỉ biên tập lại cho súc tích/hấp dẫn hơn nếu cần, không cần dịch.
-- "summary_vi": viết tóm tắt 2-3 câu bằng tiếng Việt, văn phong lôi cuốn, dễ đọc, nhưng phải CHÍNH XÁC với các sự kiện/số liệu trong tóm tắt gốc — không thêm thắt, không suy diễn.
+- "relevant": true nếu tin thuộc chủ đề smartphone, AI (trí tuệ nhân tạo), hoặc công nghệ nói chung (phần cứng, phần mềm, chip, startup công nghệ, ứng dụng...). Trả về false nếu đây là: bài quảng cáo, tin khuyến mãi/giảm giá/deal mua sắm, nội dung được tài trợ (sponsored/partner content), bài thuộc diễn đàn không phải tin tức (hỏi đáp, review cá nhân không có giá trị tin tức), hoặc chủ đề không liên quan công nghệ (chính trị, giải trí đơn thuần, thể thao...).
+- "duplicate_group": một số nguyên. Nếu 2 tin trở lên (dù khác nguồn, khác ngôn ngữ, cách viết tiêu đề khác nhau) đang nói về CÙNG MỘT sự kiện/tin tức thực tế (ví dụ: cùng đưa tin về việc ra mắt 1 sản phẩm, cùng 1 vụ rò rỉ, cùng 1 thông báo của 1 công ty) -> gán cho chúng CÙNG một số duplicate_group. Các tin không trùng với tin nào khác thì mỗi tin nhận một số duplicate_group riêng, không được trùng với số của tin khác. Chỉ những tin có "relevant": true mới cần xét gộp nhóm.
+- "title_vi": biên tập lại tiêu đề bằng tiếng Việt sao cho NGẮN GỌN, HẤP DẪN, thu hút người đọc bấm vào xem — nhưng phải giữ ĐÚNG sự thật, không giật gân sai lệch so với nội dung gốc. Nếu tin gốc đã bằng tiếng Việt (ví dụ từ VnExpress, GenK, VnReview), chỉ biên tập lại cho súc tích/hấp dẫn hơn nếu cần, không cần dịch. Nếu tin này bị gộp nhóm (duplicate_group trùng với tin khác), hãy viết title_vi là tiêu đề chung, đầy đủ nhất cho CẢ NHÓM (không cần viết riêng cho từng tin trong nhóm).
+- "summary_vi": viết tóm tắt 2-3 câu bằng tiếng Việt, văn phong lôi cuốn, dễ đọc, nhưng phải CHÍNH XÁC với các sự kiện/số liệu trong tóm tắt gốc — không thêm thắt, không suy diễn. Nếu tin bị gộp nhóm, hãy tổng hợp thông tin từ TẤT CẢ các tin trong nhóm đó thành 1 bản tóm tắt chung, đầy đủ nhất.
 
 Danh sách tin:
 {numbered}
 
 CHỈ trả lời bằng một JSON array hợp lệ, đúng thứ tự với danh sách trên, không thêm bất kỳ chữ nào khác, markdown, hay giải thích. Định dạng:
-[{{"relevant": true, "title_vi": "...", "summary_vi": "..."}}, ...]"""
+[{{"relevant": true, "duplicate_group": 1, "title_vi": "...", "summary_vi": "..."}}, ...]"""
 
     response = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=3000,
+        max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     )
     raw_text = response.content[0].text.strip()
@@ -227,6 +235,50 @@ def check_source(source, state, seen_set):
     return new_items[-MAX_NEW_PER_SOURCE:] if len(new_items) > MAX_NEW_PER_SOURCE else new_items
 
 
+def group_relevant_items(all_new, results):
+    """
+    Gộp các tin có cùng "duplicate_group" (do Claude xác định là cùng 1 sự
+    kiện/tin tức, dù khác nguồn) thành 1 nhóm duy nhất -> sau này chỉ gửi
+    1 tin nhắn Telegram cho cả nhóm, tránh đăng lặp lại cùng 1 câu chuyện.
+
+    Trả về list các dict: {"names": [...], "links": [...], "title_vi": ...,
+    "summary_vi": ..., "items": [item gốc, ...]} — theo đúng thứ tự nhóm nào
+    xuất hiện trước trong all_new thì đứng trước.
+    """
+    groups = {}
+    order = []
+    for item, result in zip(all_new, results):
+        if not result.get("relevant", True):
+            continue
+        group_key = result.get("duplicate_group")
+        if group_key is None:
+            # Claude không trả về duplicate_group (lỗi/fallback) -> coi mỗi tin
+            # là 1 nhóm riêng, dùng link làm khoá để chắc chắn không trùng.
+            group_key = ("__no_group__", item["link"])
+        if group_key not in groups:
+            groups[group_key] = {
+                "names": [],
+                "links": [],
+                "title_vi": None,
+                "summary_vi": None,
+                "items": [],
+            }
+            order.append(group_key)
+        g = groups[group_key]
+        g["items"].append(item)
+        if item["name"] not in g["names"]:
+            g["names"].append(item["name"])
+        g["links"].append(item["link"])
+        # Ưu tiên bản dịch dài nhất trong nhóm làm bản đại diện (thường đầy đủ nhất).
+        candidate_title = result.get("title_vi") or item["title"]
+        candidate_summary = result.get("summary_vi") or ""
+        if g["summary_vi"] is None or len(candidate_summary) > len(g["summary_vi"]):
+            g["title_vi"] = candidate_title
+            g["summary_vi"] = candidate_summary
+
+    return [groups[key] for key in order]
+
+
 def main():
     if not ANTHROPIC_API_KEY:
         raise RuntimeError(
@@ -251,40 +303,44 @@ def main():
         save_state(state)
         return
 
-    print(f"Có {len(all_new)} tin mới trong {LOOKBACK_HOURS} giờ qua, đang lọc + dịch bằng Claude...")
+    print(f"Có {len(all_new)} tin mới trong {LOOKBACK_HOURS} giờ qua, đang lọc + dịch + gộp tin trùng bằng Claude...")
     try:
         results = classify_and_translate(all_new, client)
     except Exception as exc:
         # Nếu Claude lỗi (mạng, hết quota, JSON sai...) -> không để mất tin:
-        # coi như mọi tin đều relevant, gửi tạm bản gốc tiếng Anh, đánh dấu đã gửi.
-        print(f"   [CẢNH BÁO] Lọc/dịch bằng Claude thất bại ({exc}). Gửi tạm bản gốc.")
-        results = [{"relevant": True, "title_vi": None, "summary_vi": None} for _ in all_new]
+        # coi như mọi tin đều relevant, không gộp nhóm được (mỗi tin 1 nhóm),
+        # gửi tạm bản gốc tiếng Anh, đánh dấu đã gửi.
+        print(f"   [CẢNH BÁO] Lọc/dịch/gộp bằng Claude thất bại ({exc}). Gửi tạm bản gốc, không gộp trùng.")
+        results = [{"relevant": True, "duplicate_group": None, "title_vi": None, "summary_vi": None} for _ in all_new]
 
-    sent_count = 0
+    # Các tin không relevant: vẫn đánh dấu đã xem để không hỏi lại, nhưng KHÔNG gửi.
     for item, result in zip(all_new, results):
         if not result.get("relevant", True):
-            # tin bị coi là quảng cáo / không liên quan -> vẫn đánh dấu đã xem để không hỏi lại,
-            # nhưng KHÔNG gửi về Telegram.
             seen_set.add(item["link"])
             print(f"   Bỏ qua (không liên quan/quảng cáo): {item['title'][:70]}")
-            continue
 
-        title_vi = result.get("title_vi") or item["title"]
-        summary_vi = result.get("summary_vi") or ""
+    groups = group_relevant_items(all_new, results)
 
-        text = f"🗞 <b>{item['name']}</b>\n{title_vi}"
-        if summary_vi:
-            text += f"\n{summary_vi}"
-        text += f"\n{item['link']}"
+    sent_count = 0
+    for g in groups:
+        header = g["names"][0] if len(g["names"]) == 1 else f'{g["names"][0]} (+ {", ".join(g["names"][1:])})'
+        text = f"🗞 <b>{header}</b>\n{g['title_vi']}"
+        if g["summary_vi"]:
+            text += f"\n{g['summary_vi']}"
+        # Nếu gộp nhiều nguồn thì liệt kê đủ link để người đọc đối chiếu, tin lẻ chỉ có 1 link.
+        text += "\n" + "\n".join(g["links"])
 
         ok = send_telegram_message(text)
         if ok:
-            seen_set.add(item["link"])
+            for link in g["links"]:
+                seen_set.add(link)
             sent_count += 1
-            print(f"   Đã gửi: {title_vi[:70]}")
+            n_sources = len(g["names"])
+            tag = f" (gộp {n_sources} nguồn)" if n_sources > 1 else ""
+            print(f"   Đã gửi{tag}: {g['title_vi'][:70]}")
         time.sleep(1)  # tránh gửi dồn dập bị Telegram giới hạn tốc độ
 
-    print(f"Hoàn tất: gửi {sent_count}/{len(all_new)} tin.")
+    print(f"Hoàn tất: gửi {sent_count}/{len(groups)} tin (từ {len(all_new)} tin gốc trước khi gộp).")
     state["seen"] = list(seen_set)
     save_state(state)
 
