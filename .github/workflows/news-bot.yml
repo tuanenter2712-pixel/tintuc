@@ -8,7 +8,7 @@ on:
     # không chạy -> tự động "tạm dừng" ban đêm mà không cần code xử lý.
     # GitHub có thể trễ vài phút vào giờ cao điểm, đó là giới hạn chung
     # của GitHub Actions, không phải lỗi của script.
-    - cron: "0 0-16 * * *"
+    - cron: "0 0 * * *"
   workflow_dispatch: {} # cho phép bấm "Run workflow" để chạy thử thủ công
 
 permissions:
