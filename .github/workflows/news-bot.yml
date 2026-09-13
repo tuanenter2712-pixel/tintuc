@@ -2,9 +2,13 @@ name: News to Telegram
 
 on:
   schedule:
-    # Chạy mỗi 30 phút (giờ UTC). GitHub có thể trễ vài phút vào giờ cao điểm,
-    # đó là giới hạn chung của GitHub Actions, không phải lỗi của script.
-    - cron: "*/30 * * * *"
+    # Chạy mỗi giờ (đúng phút 0), CHỈ trong khung 00:00-16:00 UTC.
+    # Việt Nam là UTC+7 quanh năm (không có giờ mùa hè), nên khung này
+    # tương ứng đúng 07:00-23:00 giờ Hà Nội. Ngoài khung giờ này workflow
+    # không chạy -> tự động "tạm dừng" ban đêm mà không cần code xử lý.
+    # GitHub có thể trễ vài phút vào giờ cao điểm, đó là giới hạn chung
+    # của GitHub Actions, không phải lỗi của script.
+    - cron: "0 0-16 * * *"
   workflow_dispatch: {} # cho phép bấm "Run workflow" để chạy thử thủ công
 
 permissions:
@@ -29,6 +33,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python news_to_telegram.py
 
       - name: Lưu lại trạng thái (seen.json)
