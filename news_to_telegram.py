@@ -205,15 +205,26 @@ def check_source(source, state, seen_set):
         return []
 
     new_items = []
+    skipped_seen = 0
+    skipped_old = 0
     for e in entries:
         link = e.get("link")
         title = e.get("title", "(không có tiêu đề)")
         if not link or link in seen_set:
+            skipped_seen += 1
             continue
         if not is_published_today_hanoi(e):
+            skipped_old += 1
             continue  # bỏ qua tin không phải đăng trong ngày hôm nay
         summary = clean_summary(e.get("summary", ""))
         new_items.append({"name": name, "title": title, "link": link, "summary": summary})
+
+    print(
+        f"   Tổng {len(entries)} bài trong feed | "
+        f"đã thấy trước đó: {skipped_seen} | "
+        f"không phải hôm nay: {skipped_old} | "
+        f"đạt điều kiện: {len(new_items)}"
+    )
 
     # feed thường liệt kê tin mới nhất trước -> đảo lại để xử lý theo thứ tự thời gian
     new_items.reverse()
