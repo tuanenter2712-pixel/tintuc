@@ -6,9 +6,16 @@ on:
     # Việt Nam là UTC+7 quanh năm (không có giờ mùa hè), nên khung này
     # tương ứng đúng 07:00-23:00 giờ Hà Nội. Ngoài khung giờ này workflow
     # không chạy -> tự động "tạm dừng" ban đêm mà không cần code xử lý.
+    #
+    # Lần chạy 07:00 sáng KHÔNG cần logic riêng để "tổng hợp qua đêm":
+    # news_to_telegram.py lọc tin theo LOOKBACK_HOURS = 24 giờ gần nhất
+    # (không theo "đúng ngày hôm nay" như trước), và luôn nhớ tin đã gửi
+    # qua seen.json -> lần chạy 7h sáng sẽ tự động nhặt được mọi tin phát
+    # sinh từ 23h đêm hôm trước mà chưa từng gửi, không trùng lặp.
+    #
     # GitHub có thể trễ vài phút vào giờ cao điểm, đó là giới hạn chung
     # của GitHub Actions, không phải lỗi của script.
-    - cron: "0 0 * * *"
+    - cron: "0 0-16 * * *"
   workflow_dispatch: {} # cho phép bấm "Run workflow" để chạy thử thủ công
 
 permissions:
