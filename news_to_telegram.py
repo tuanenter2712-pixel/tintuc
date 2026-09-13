@@ -1,19 +1,20 @@
 """
-News -> Telegram bot (6 nguồn, tổng hợp 1 lần/ngày, lọc chủ đề + dịch tiếng Việt bằng Claude)
+News -> Telegram bot (6 nguồn, chạy mỗi giờ, lọc chủ đề + dịch tiếng Việt bằng Claude)
 --------------------------------------------------------------------------------------------------
 Đọc tin từ 6 nguồn RSS bên dưới, CHỈ giữ lại tin được đăng trong vòng
-LOOKBACK_HOURS giờ gần nhất (mặc định 24h, để bắt trọn tin "qua đêm") và
-chưa từng gửi trước đó (lưu trong seen.json). Với các tin đạt yêu cầu, gửi
-cho Claude (Anthropic API) để:
+LOOKBACK_HOURS giờ gần nhất (mặc định 24h) và chưa từng gửi trước đó (lưu
+trong seen.json). Với các tin đạt yêu cầu, gửi cho Claude (Anthropic API) để:
   1) Lọc: chỉ giữ tin về smartphone / AI / công nghệ, bỏ tin quảng cáo,
      khuyến mãi, tài trợ (sponsored), hoặc không liên quan công nghệ.
   2) Dịch tiêu đề + tóm tắt sang tiếng Việt: chính xác với nội dung gốc
      nhưng viết theo văn phong hấp dẫn, lôi cuốn người đọc.
 Sau đó gửi các tin đã lọc + đã dịch về Telegram.
 
-Lịch chạy: 1 lần/ngày lúc 07:00 giờ Hà Nội (xem .github/workflows/news-bot.yml)
-— tổng hợp toàn bộ tin công nghệ tích lũy qua đêm hôm trước, thay vì chạy
-hàng giờ như trước đây.
+Lịch chạy: mỗi giờ, 07:00-23:00 giờ Hà Nội (xem .github/workflows/news-bot.yml).
+Nhờ lọc theo LOOKBACK_HOURS = 24 giờ gần nhất (thay vì "đúng ngày hôm nay"
+như trước) và luôn nhớ tin đã gửi qua seen.json, lần chạy 07:00 sáng sẽ tự
+động nhặt được mọi tin phát sinh từ 23h đêm hôm trước mà chưa từng gửi,
+không cần logic riêng và không bị trùng lặp.
 """
 
 import json
@@ -41,15 +42,14 @@ SOURCES = [
 ]
 
 # Chỉ lấy tin được đăng trong vòng LOOKBACK_HOURS giờ gần nhất — không lấy tin cũ hơn.
-# Mặc định 24h vì bot giờ chạy 1 lần/ngày lúc 7h sáng, cần bắt trọn tin đăng
-# suốt đêm hôm trước (kể cả tin đăng 23h-24h, vẫn thuộc "ngày hôm qua" theo lịch).
+# Mặc định 24h để lần chạy 7h sáng bắt trọn tin đăng suốt đêm hôm trước (kể cả
+# tin đăng 23h-24h, vẫn thuộc "ngày hôm qua" theo lịch) mà không cần logic riêng.
 HANOI_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 LOOKBACK_HOURS = 24
 
-# Mỗi lần chạy chỉ xét tối đa từng này tin MỚI cho mỗi nguồn.
-# Tăng lên so với trước (8) vì giờ mỗi lần chạy phải gộp tin của cả một đêm/ngày
-# thay vì chỉ 1 giờ, các nguồn hoạt động mạnh (TechCrunch, The Verge, Engadget...)
-# có thể có vài chục bài/ngày.
+# Mỗi lần chạy chỉ xét tối đa từng này tin MỚI cho mỗi nguồn. Đặt cao hơn mức
+# cần cho 1 giờ bình thường để có khoảng đệm an toàn (ví dụ lần 7h sáng gộp
+# nhiều tin hơn, hoặc lỡ có lần chạy bị GitHub bỏ lỡ).
 MAX_NEW_PER_SOURCE = 40
 
 # Giữ lại tối đa từng này link trong lịch sử "đã gửi" (tránh file phình to mãi)
