@@ -1,25 +1,26 @@
 """
-News -> Telegram bot (6 nguồn, chỉ lấy tin trong ngày, lọc chủ đề + dịch tiếng Việt bằng Claude)
+News -> Telegram bot (6 nguồn, tổng hợp 1 lần/ngày, lọc chủ đề + dịch tiếng Việt bằng Claude)
 --------------------------------------------------------------------------------------------------
-Đọc tin từ 6 nguồn RSS bên dưới, CHỈ giữ lại tin được đăng TRONG NGÀY HÔM NAY
-(theo giờ Hà Nội) và chưa từng gửi trước đó (lưu trong seen.json). Với các tin
-đạt yêu cầu, gửi cho Claude (Anthropic API) để:
+Đọc tin từ 6 nguồn RSS bên dưới, CHỈ giữ lại tin được đăng trong vòng
+LOOKBACK_HOURS giờ gần nhất (mặc định 24h, để bắt trọn tin "qua đêm") và
+chưa từng gửi trước đó (lưu trong seen.json). Với các tin đạt yêu cầu, gửi
+cho Claude (Anthropic API) để:
   1) Lọc: chỉ giữ tin về smartphone / AI / công nghệ, bỏ tin quảng cáo,
      khuyến mãi, tài trợ (sponsored), hoặc không liên quan công nghệ.
   2) Dịch tiêu đề + tóm tắt sang tiếng Việt: chính xác với nội dung gốc
      nhưng viết theo văn phong hấp dẫn, lôi cuốn người đọc.
 Sau đó gửi các tin đã lọc + đã dịch về Telegram.
 
-Lịch chạy: mỗi 60 phút, chỉ trong khung giờ 07:00-23:00 giờ Hà Nội
-(xem .github/workflows/news-bot.yml — cron chỉ định nghĩa khung giờ chạy,
-KHÔNG cần xử lý gì thêm trong code cho việc tạm dừng ban đêm).
+Lịch chạy: 1 lần/ngày lúc 07:00 giờ Hà Nội (xem .github/workflows/news-bot.yml)
+— tổng hợp toàn bộ tin công nghệ tích lũy qua đêm hôm trước, thay vì chạy
+hàng giờ như trước đây.
 """
 
 import json
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -39,12 +40,17 @@ SOURCES = [
     {"name": "VnExpress - Khoa học công nghệ", "url": "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss"},
 ]
 
-# Chỉ lấy tin được đăng TRONG NGÀY HÔM NAY theo giờ Hà Nội — không lấy tin cũ.
+# Chỉ lấy tin được đăng trong vòng LOOKBACK_HOURS giờ gần nhất — không lấy tin cũ hơn.
+# Mặc định 24h vì bot giờ chạy 1 lần/ngày lúc 7h sáng, cần bắt trọn tin đăng
+# suốt đêm hôm trước (kể cả tin đăng 23h-24h, vẫn thuộc "ngày hôm qua" theo lịch).
 HANOI_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+LOOKBACK_HOURS = 24
 
-# Mỗi lần chạy chỉ xét tối đa từng này tin MỚI cho mỗi nguồn,
-# để tránh spam / tốn phí API nếu vì lý do gì đó bị "sót" nhiều lần chạy liên tiếp.
-MAX_NEW_PER_SOURCE = 8
+# Mỗi lần chạy chỉ xét tối đa từng này tin MỚI cho mỗi nguồn.
+# Tăng lên so với trước (8) vì giờ mỗi lần chạy phải gộp tin của cả một đêm/ngày
+# thay vì chỉ 1 giờ, các nguồn hoạt động mạnh (TechCrunch, The Verge, Engadget...)
+# có thể có vài chục bài/ngày.
+MAX_NEW_PER_SOURCE = 40
 
 # Giữ lại tối đa từng này link trong lịch sử "đã gửi" (tránh file phình to mãi)
 MAX_SEEN_HISTORY = 800
@@ -116,9 +122,11 @@ def clean_summary(raw_html: str, limit: int = 300) -> str:
     return text[:limit]
 
 
-def is_published_today_hanoi(entry) -> bool:
+def is_recent_enough(entry) -> bool:
     """
-    Chỉ chấp nhận tin có ngày đăng = ngày hôm nay theo giờ Hà Nội.
+    Chỉ chấp nhận tin được đăng trong vòng LOOKBACK_HOURS giờ gần nhất tính đến
+    lúc chạy — thay cho cách lọc "đúng ngày hôm nay theo lịch" trước đây (cách cũ
+    sẽ bỏ sót tin đăng cuối đêm hôm trước, vì lúc đó ngày đăng đã là "hôm qua").
     Nếu feed không có thông tin ngày đăng -> bỏ qua (an toàn hơn là lỡ lấy tin cũ).
     """
     struct_time = entry.get("published_parsed") or entry.get("updated_parsed")
@@ -126,9 +134,8 @@ def is_published_today_hanoi(entry) -> bool:
         return False
     # feedparser trả về struct_time đã chuẩn hoá theo UTC
     published_utc = datetime(*struct_time[:6], tzinfo=ZoneInfo("UTC"))
-    published_hanoi_date = published_utc.astimezone(HANOI_TZ).date()
-    today_hanoi_date = datetime.now(HANOI_TZ).date()
-    return published_hanoi_date == today_hanoi_date
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    return (now_utc - published_utc) <= timedelta(hours=LOOKBACK_HOURS)
 
 
 def classify_and_translate(items, client):
@@ -205,26 +212,15 @@ def check_source(source, state, seen_set):
         return []
 
     new_items = []
-    skipped_seen = 0
-    skipped_old = 0
     for e in entries:
         link = e.get("link")
         title = e.get("title", "(không có tiêu đề)")
         if not link or link in seen_set:
-            skipped_seen += 1
             continue
-        if not is_published_today_hanoi(e):
-            skipped_old += 1
-            continue  # bỏ qua tin không phải đăng trong ngày hôm nay
+        if not is_recent_enough(e):
+            continue  # bỏ qua tin đăng quá lâu (ngoài khung LOOKBACK_HOURS giờ gần nhất)
         summary = clean_summary(e.get("summary", ""))
         new_items.append({"name": name, "title": title, "link": link, "summary": summary})
-
-    print(
-        f"   Tổng {len(entries)} bài trong feed | "
-        f"đã thấy trước đó: {skipped_seen} | "
-        f"không phải hôm nay: {skipped_old} | "
-        f"đạt điều kiện: {len(new_items)}"
-    )
 
     # feed thường liệt kê tin mới nhất trước -> đảo lại để xử lý theo thứ tự thời gian
     new_items.reverse()
@@ -250,12 +246,12 @@ def main():
             print(f"   Lỗi khi xử lý {source['name']}: {exc}")
 
     if not all_new:
-        print("Không có tin mới trong ngày hôm nay.")
+        print(f"Không có tin mới trong {LOOKBACK_HOURS} giờ qua.")
         state["seen"] = list(seen_set)
         save_state(state)
         return
 
-    print(f"Có {len(all_new)} tin mới trong ngày, đang lọc + dịch bằng Claude...")
+    print(f"Có {len(all_new)} tin mới trong {LOOKBACK_HOURS} giờ qua, đang lọc + dịch bằng Claude...")
     try:
         results = classify_and_translate(all_new, client)
     except Exception as exc:
